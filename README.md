@@ -55,6 +55,8 @@ are not in any list I could find, so those are not reported.
 
 ## Auto-reveal walls (optional)
 
+**Steam must be running** for this launch mode. The button checks, and starts Steam for you (waiting up to a minute) if it isn't already open; if that fails, start Steam yourself and click again.
+
 The button runs `me3\bin\me3.exe launch -p walls.me3` next to the script. This repo does not ship Mod Engine 3
 or a wall mod. To use it, download Mod Engine 3 into `me3\`, and write a `walls.me3` profile pointing at a mod that
 auto-reveals illusory walls (for example *Auto Reveal Illusory Walls* on Nexus Mods). Mod files built from game

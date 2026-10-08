@@ -659,14 +659,27 @@ def main():
         except Exception as e:
             out.set(f"Launch failed: {e}")
 
-    def launch_walls():  # Mod Engine 3 + walls.me3 (auto-reveal illusory walls); both live next to this script
+    def launch_walls():  # Mod Engine 3 + walls.me3 (auto-reveal illusory walls); needs Steam running, so start it if it isn't
         import os, subprocess
         here = _app_dir()
+
+        def steam_up():
+            return b"steam.exe" in subprocess.run(["tasklist", "/FI", "IMAGENAME eq steam.exe"], capture_output=True,
+                                                  creationflags=0x08000000).stdout.lower()
+        if not steam_up():
+            os.startfile("steam://open/main")
+            for _ in range(60):  # up to 60s for Steam to appear, then a few more seconds to finish signing in
+                time.sleep(1)
+                if steam_up():
+                    time.sleep(8)
+                    break
+            else:
+                return "Steam did not start. Start Steam yourself, then click again."
         try:
             subprocess.Popen([os.path.join(here, "me3", "bin", "me3.exe"), "launch", "-p", os.path.join(here, "walls.me3")], cwd=here)
-            out.set("Launching with auto-reveal walls (Steam must be running). Stay offline.")
+            return "Launching with auto-reveal walls. Stay offline."
         except Exception as e:
-            out.set(f"Launch failed: {e}")
+            return f"Launch failed: {e}"
 
     def section(title):
         f = tk.LabelFrame(root, text=title, padx=6, pady=4)
@@ -691,7 +704,7 @@ def main():
 
     f = section("Launch")
     btn(f, "Launch offline", launch, "Starts eldenring.exe directly so Easy Anti-Cheat never loads. Offline play only; going online risks a ban.")
-    btn(f, "Launch with auto-reveal walls", launch_walls, "Starts the game through Mod Engine 3 with your walls.me3 profile (optional; see README).")
+    btn(f, "Launch with auto-reveal walls", lambda: run(launch_walls), "Starts the game through Mod Engine 3 with your walls.me3 profile (optional; see README). Needs Steam running; starts it for you if it isn't.")
 
     f = section("Runes")
     btn(f, "Read runes", lambda: run(read_runes), "Shows your current rune count.")
