@@ -6,6 +6,8 @@ One file, no installer, no game files modified.
 **Offline only.** It refuses to attach while Easy Anti-Cheat is running. Never use it online: you will get banned.
 Back up your save (`ER0000.sl2`) before using any trainer. Not affiliated with FromSoftware or Bandai Namco.
 
+![Gideon's Ledger window](docs_img/ui.png)
+
 ## Requirements
 
 - Windows and the **Steam** version of Elden Ring (Steam must be installed; the launcher sets the Steam app id). Other storefronts are untested.
