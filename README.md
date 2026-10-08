@@ -65,7 +65,8 @@ data are not redistributed here. Mod Engine 3 blocks online matchmaking by defau
 ## Bugs and feature requests
 
 Found a bug or want a new feature? Please post it on the [Discussions board](../../discussions). Include what you clicked, the
-status text shown in the app, and your game version if you can.
+status text shown in the app, and your game version if you can. The app also writes `ledger.log` next to the
+EXE (or script); attach it, or paste its last lines. It holds errors and launch steps, no personal data beyond the folder path.
 
 ## Credits
 

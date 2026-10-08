@@ -1,5 +1,9 @@
 """Gideon's Ledger: Elden Ring trainer. Launch offline, read/add runes, smart drops. Offline only."""
-import queue, re, struct, sys, threading, time, tkinter as tk
+import logging, queue, re, struct, sys, threading, time, tkinter as tk
+
+VERSION = "1.1.3"
+log = logging.getLogger("ledger")
+log.addHandler(logging.NullHandler())
 
 # GameDataMan signature + layout from The-Grand-Archives/Elden-Ring-CT-TGA (patch-resistant AOB, no fixed address).
 # [[GameDataMan]+8] = PlayerGameData; +0x68 level (in TGA table), +0x6C runes (neighbour field; confirm in-game).
@@ -118,6 +122,20 @@ def param_table(read, mgr, name):
 def _app_dir():  # folder beside the .exe when frozen (onefile __file__ is a temp dir), else beside the script
     import os
     return os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
+
+
+def _setup_log():  # ledger.log beside the app (256 KB, one backup); also catches crashes that would otherwise vanish in the windowed EXE
+    import logging.handlers, os
+    try:
+        h = logging.handlers.RotatingFileHandler(os.path.join(_app_dir(), "ledger.log"), maxBytes=256_000, backupCount=1, encoding="utf-8")
+    except OSError:  # read-only folder: run without a log file
+        return
+    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    log.addHandler(h)
+    log.setLevel(logging.INFO)
+    sys.excepthook = lambda t, v, tb: log.error("Uncaught exception", exc_info=(t, v, tb))
+    threading.excepthook = lambda a: log.error("Uncaught exception in thread", exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
+    log.info("Gideon's Ledger v%s start. frozen=%s dir=%s python=%s", VERSION, getattr(sys, "frozen", False), _app_dir(), sys.version.split()[0])
 
 
 def _load_json(path):
@@ -586,8 +604,10 @@ class Tip(tk.Label):
 
 
 def main():
+    _setup_log()
     root = tk.Tk()
-    root.title("Gideon's Ledger v1.1.2")
+    root.title(f"Gideon's Ledger v{VERSION}")
+    root.report_callback_exception = lambda *a: (log.error("UI callback error", exc_info=a), out.set("Unexpected error. Details are in ledger.log next to the app."))
     root.attributes("-topmost", True)
     out = tk.StringVar(value="Back up your save first. Offline mode only.")
 
@@ -606,6 +626,7 @@ def main():
             try:
                 msgs.put(fn())
             except Exception as e:  # process missing, bad pointer, etc.
+                log.warning("Action failed: %s", e) if "Could not find process" in str(e) else log.exception("Action failed")
                 msgs.put(f"Failed: {e}")
             finally:
                 busy.release()
@@ -639,6 +660,8 @@ def main():
                     if (dt := time.perf_counter() - t) > 1:  # evidence for the in-game hitch hunt
                         msgs.put(f"Smart drops refresh took {dt:.1f}s")
                 except Exception as e:
+                    if "Could not find process" not in str(e):  # game not open yet is normal, don't log it every 10s
+                        log.exception("Smart drops refresh failed")
                     msgs.put("Smart drops waiting for the game to start..." if "Could not find process" in str(e)
                              else f"Smart drops refresh failed: {e}")
                 finally:
@@ -652,7 +675,8 @@ def main():
             try:
                 fn()
             except Exception:
-                pass
+                log.exception("Restore on close failed")
+        log.info("Closed")
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", close)
@@ -698,8 +722,10 @@ def main():
         try:
             subprocess.Popen([game_dir + r"\eldenring.exe"], cwd=game_dir, env=env)
         except Exception as e:
+            log.exception("Launch offline failed")
             report(f"Launch failed: {e}", 0)
             return f"Launch failed: {e}"
+        log.info("Launch offline: started %s", game_dir)
         await_game(40)
         return "Launched offline (no Easy Anti-Cheat). Stay offline."
 
@@ -729,6 +755,7 @@ def main():
         me3 = os.path.join(here, "me3", "bin", "me3.exe")
         missing = [n for n, f in (("me3/bin/me3.exe", me3), ("walls.me3", os.path.join(here, "walls.me3"))) if not os.path.exists(f)]
         if missing:  # check before starting Steam so a bad folder fails fast and says where it looked
+            log.error("Launch with walls: missing %s in %s", missing, here)
             report(f"Missing: {', '.join(missing)}. Looked in {here}", 0)
             return f"Not found next to the app: {', '.join(missing)}. Looked in {here}"
         if steam_up():
@@ -741,6 +768,7 @@ def main():
                 if steam_up():
                     break
             else:
+                log.error("Steam did not start within 60s")
                 report("Steam did not start. Start Steam yourself, then click again.", 0)
                 return "Steam did not start. Start Steam yourself, then click again."
             for i in range(30):  # then until it reports a signed-in user (~15s typical); bar fills 30-60% on that estimate
@@ -752,8 +780,10 @@ def main():
         try:
             subprocess.Popen([me3, "launch", "-p", os.path.join(here, "walls.me3")], cwd=here)
         except Exception as e:
+            log.exception("Launch with walls failed")
             report(f"Launch failed: {e}", 0)
             return f"Launch failed: {e}"
+        log.info("Launch with walls: me3 started")
         await_game(70)
         return "Launching with auto-reveal walls. Stay offline."
 
