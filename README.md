@@ -62,6 +62,11 @@ or a wall mod. To use it, download Mod Engine 3 into `me3\`, and write a `walls.
 auto-reveals illusory walls (for example *Auto Reveal Illusory Walls* on Nexus Mods). Mod files built from game
 data are not redistributed here. Mod Engine 3 blocks online matchmaking by default; keep it that way.
 
+## Bugs and feature requests
+
+Found a bug or want a new feature? Please post it on the [Discussions board](../../discussions). Include what you clicked, the
+status text shown in the app, and your game version if you can.
+
 ## Credits
 
 Memory signatures and structure offsets come from
