@@ -544,9 +544,30 @@ def show_progress():
     return "Progress saved to progress.txt: " + text.splitlines()[0]
 
 
+class Tip(tk.Label):
+    """Small (i) icon; hover for a tooltip."""
+    def __init__(self, parent, text):
+        super().__init__(parent, text="i", font=("Segoe UI", 8, "bold"), fg="white", bg="#3b78c4", width=2, cursor="question_arrow")
+        self.text, self.win = text, None
+        self.bind("<Enter>", self.show)
+        self.bind("<Leave>", self.hide)
+
+    def show(self, _=None):
+        self.win = tk.Toplevel(self)
+        self.win.wm_overrideredirect(True)
+        self.win.attributes("-topmost", True)
+        self.win.geometry(f"+{self.winfo_rootx() + 22}+{self.winfo_rooty() + 18}")
+        tk.Label(self.win, text=self.text, wraplength=260, justify="left", bg="#ffffe0", relief="solid", borderwidth=1, padx=6, pady=3).pack()
+
+    def hide(self, _=None):
+        if self.win:
+            self.win.destroy()
+            self.win = None
+
+
 def main():
     root = tk.Tk()
-    root.title("Gideon's Ledger")
+    root.title("Gideon's Ledger v1.1")
     root.attributes("-topmost", True)
     out = tk.StringVar(value="Back up your save first. Offline mode only.")
 
@@ -629,15 +650,43 @@ def main():
         except Exception as e:
             out.set(f"Launch failed: {e}")
 
-    tk.Button(root, text="Launch offline", command=launch).pack(padx=12, pady=(8, 0))
-    tk.Button(root, text="Launch with auto-reveal walls", command=launch_walls).pack(padx=12, pady=(4, 0))
-    tk.Button(root, text="Read runes", command=lambda: run(read_runes)).pack(padx=12, pady=8)
-    tk.Entry(root, textvariable=amount, justify="right").pack(padx=12)
-    tk.Button(root, text="Add runes", command=add).pack(padx=12, pady=(4, 0))
-    tk.Button(root, text="Max runes", command=lambda: run(lambda: add_runes(MAX_RUNES))).pack(padx=12, pady=4)
+    def section(title):
+        f = tk.LabelFrame(root, text=title, padx=6, pady=4)
+        f.pack(fill="x", padx=10, pady=(6, 0))
+        return f
+
+    def line(parent, tip=None):  # one row: widgets packed left, optional (i) tooltip pinned right
+        r = tk.Frame(parent)
+        r.pack(fill="x", pady=2)
+        if tip:
+            Tip(r, tip).pack(side="right", padx=(4, 0))
+        return r
+
+    def btn(parent, text, cmd, tip=None):
+        r = line(parent, tip)
+        b = tk.Button(r, text=text, command=cmd)
+        b.pack(side="left", fill="x", expand=True)
+        return b
+
+    def entry(r, var, width=12):
+        tk.Entry(r, textvariable=var, justify="right", width=width).pack(side="left", padx=(0, 4))
+
+    f = section("Launch")
+    btn(f, "Launch offline", launch, "Starts eldenring.exe directly so Easy Anti-Cheat never loads. Offline play only; going online risks a ban.")
+    btn(f, "Launch with auto-reveal walls", launch_walls, "Starts the game through Mod Engine 3 with your walls.me3 profile (optional; see README).")
+
+    f = section("Runes")
+    btn(f, "Read runes", lambda: run(read_runes), "Shows your current rune count.")
+    r = line(f, "Adds this many runes to your current total.")
+    entry(r, amount)
+    tk.Button(r, text="Add runes", command=add).pack(side="left", fill="x", expand=True)
+    btn(f, "Max runes", lambda: run(lambda: add_runes(MAX_RUNES)), "Sets runes to the maximum, 999,999,999.")
+
+    f = section("Items")
     qty = tk.StringVar(value="1")
-    tk.Entry(root, textvariable=qty, justify="right").pack(padx=12, pady=(8, 0))
-    tk.Button(root, text="Add Lord's Rune", command=lambda: run(lambda: add_lords_rune(int(qty.get())))).pack(padx=12, pady=(4, 0))
+    r = line(f, "Gives Lord's Runes through the game's own item function, so they register properly.")
+    entry(r, qty, 5)
+    tk.Button(r, text="Add Lord's Rune", command=lambda: run(lambda: add_lords_rune(int(qty.get())))).pack(side="left", fill="x", expand=True)
     def upgrade_window():  # one checkbox per item, one quantity for all ticked items
         win = tk.Toplevel(root)
         win.title("Upgrade items")
@@ -673,22 +722,31 @@ def main():
         tk.Button(bar, text="Add ticked items",
                   command=lambda: run(lambda: add_upgrades([n for n, v in checks.items() if v.get()], int(qty_var.get())))).pack(side="left")
 
-    tk.Button(root, text="Weapon / spirit ash upgrade items...", command=upgrade_window).pack(padx=12, pady=(8, 0))
-    tk.Button(root, text="Check item give", command=lambda: run(check_item_give)).pack(padx=12, pady=(4, 0))
+    btn(f, "Weapon / spirit ash upgrade items...", upgrade_window, "Opens a list of smithing stones, somber stones and gloveworts. Tick what you want and add them in bulk.")
+    btn(f, "Check item give", lambda: run(check_item_give), "Read-only self-check: confirms the item-give function was found. Nothing is called or written.")
+
+    f = section("Smart drops")
     cons = tk.BooleanVar(value=True)
-    tk.Checkbutton(root, text="Always drop consumables + materials", variable=cons,
-                   command=lambda: set_consumables(cons.get())).pack(padx=12, pady=(8, 0))
-    tk.Button(root, text="Smart drops: preview", command=lambda: run(smart_dry_run)).pack(padx=12, pady=(4, 0))
-    tk.Button(root, text="Smart drops ON (new gear)", command=lambda: run(lambda: smart_drops(True))).pack(padx=12, pady=(4, 0))
-    tk.Button(root, text="Smart drops OFF", command=lambda: run(lambda: smart_drops(False))).pack(padx=12, pady=(4, 0))
-    tk.Button(root, text="Read progress", command=lambda: run(show_progress)).pack(padx=12, pady=(4, 0))
-    tk.Button(root, text="Read NPC quest state", command=lambda: run(show_quests)).pack(padx=12, pady=(4, 0))
+    r = line(f, "Also guarantee consumables and materials you don't own, not just weapons and armor. Set before turning drops ON.")
+    tk.Checkbutton(r, text="Include consumables + materials", variable=cons, command=lambda: set_consumables(cons.get())).pack(side="left")
+    btn(f, "Preview", lambda: run(smart_dry_run), "Read-only: counts how many drop lots would change. Nothing is written.")
+    btn(f, "ON (new gear)", lambda: run(lambda: smart_drops(True)), "Enemy drop lots that offer gear you don't own always drop it. Refreshes as you pick things up.")
+    btn(f, "OFF", lambda: run(lambda: smart_drops(False)), "Restores the original drop table byte-for-byte. Closing the app does this too.")
+
+    f = section("Discovery")
     mult = tk.StringVar(value="10")
-    tk.Entry(root, textvariable=mult, justify="right").pack(padx=12, pady=(8, 0))
-    tk.Button(root, text="Read discovery", command=lambda: run(show_discovery)).pack(padx=12, pady=(4, 0))
-    tk.Button(root, text="Discovery ON (x multiplier)", command=lambda: run(lambda: set_discovery(True, float(mult.get())))).pack(padx=12, pady=(4, 0))
-    tk.Button(root, text="Discovery OFF", command=lambda: run(lambda: set_discovery(False))).pack(padx=12, pady=(4, 8))
-    tk.Label(root, textvariable=out, wraplength=320).pack(padx=12, pady=(0, 8))
+    r = line(f, "Multiplies the item-discovery curve (Arcane), 1 to 100. OFF restores the exact original values.")
+    tk.Label(r, text="Multiplier x").pack(side="left")
+    entry(r, mult, 5)
+    tk.Button(r, text="ON", command=lambda: run(lambda: set_discovery(True, float(mult.get())))).pack(side="left", fill="x", expand=True)
+    tk.Button(r, text="OFF", command=lambda: run(lambda: set_discovery(False))).pack(side="left", fill="x", expand=True, padx=(4, 0))
+    btn(f, "Read discovery", lambda: run(show_discovery), "Shows the current discovery curve values.")
+
+    f = section("Read-only")
+    btn(f, "Read progress", lambda: run(show_progress), "Story flags, endings, Great Runes, bosses and graces per region. Needs data/event_flags.json (see README).")
+    btn(f, "Read NPC quest state", lambda: run(show_quests), "What each NPC would say right now. Needs data/npc_steps.json built from your own game files (see README).")
+
+    tk.Label(root, textvariable=out, wraplength=300, justify="left", relief="sunken", anchor="w", padx=6, pady=4).pack(fill="x", padx=10, pady=10)
     root.mainloop()
 
 
