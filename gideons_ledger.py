@@ -567,7 +567,7 @@ class Tip(tk.Label):
 
 def main():
     root = tk.Tk()
-    root.title("Gideon's Ledger v1.1")
+    root.title("Gideon's Ledger v1.1.1")
     root.attributes("-topmost", True)
     out = tk.StringVar(value="Back up your save first. Offline mode only.")
 
