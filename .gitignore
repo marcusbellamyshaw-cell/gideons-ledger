@@ -20,3 +20,4 @@ quests.txt
 dist/
 build/
 *.spec
+game_dir.txt

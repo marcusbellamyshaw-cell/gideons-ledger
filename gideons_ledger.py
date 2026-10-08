@@ -631,9 +631,27 @@ def main():
     root.after(10_000, tick)
     root.after(100, poll)
 
+    def game_folder():  # default Steam path, else the saved choice, else ask once and remember it (game_dir.txt beside the app)
+        import os
+        from tkinter import filedialog
+        saved = os.path.join(_app_dir(), "game_dir.txt")
+        cands = [r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game"]
+        if os.path.exists(saved):
+            cands.insert(0, open(saved, encoding="utf-8").read().strip())
+        for c in cands:
+            if os.path.exists(os.path.join(c, "eldenring.exe")):
+                return c
+        d = filedialog.askdirectory(parent=root, title="Select the ELDEN RING Game folder (contains eldenring.exe)")
+        if d and os.path.exists(os.path.join(d, "eldenring.exe")):
+            _save_text(saved, d)
+            return d
+
     def launch():
         import os, subprocess
-        game_dir = r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game"  # crewcut: default Steam path only
+        game_dir = game_folder()
+        if not game_dir:
+            out.set("Launch cancelled: eldenring.exe not found.")
+            return
         env = {**os.environ, "SteamAppId": "1245620", "SteamGameId": "1245620"}
         try:
             subprocess.Popen([game_dir + r"\eldenring.exe"], cwd=game_dir, env=env)

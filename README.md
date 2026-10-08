@@ -6,6 +6,11 @@ One file, no installer, no game files modified.
 **Offline only.** It refuses to attach while Easy Anti-Cheat is running. Never use it online: you will get banned.
 Back up your save (`ER0000.sl2`) before using any trainer. Not affiliated with FromSoftware or Bandai Namco.
 
+## Requirements
+
+- Windows and the **Steam** version of Elden Ring (Steam must be installed; the launcher sets the Steam app id). Other storefronts are untested.
+- Python 3 with `pymem` only if you run the script; the EXE needs nothing.
+
 ## Features
 
 - **Launch offline**: starts `eldenring.exe` directly with the Steam app id set, so Easy Anti-Cheat never loads.
@@ -32,7 +37,7 @@ python gideons_ledger.py
 python gideons_ledger.py --selftest   # no game or pymem needed
 ```
 
-Assumes the default Steam path (`C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game`); edit `launch()` otherwise.
+Looks for the game at the default Steam path (`C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game`). If it is elsewhere, **Launch offline** asks for the folder once and remembers it in `game_dir.txt` next to the app.
 Click **Smart drops OFF** / **Discovery OFF** (or just close the window) before quitting the game session.
 
 **No Python?** Download `GideonsLedger.exe` from the [Releases](../../releases) page. It is unsigned, so Windows SmartScreen
