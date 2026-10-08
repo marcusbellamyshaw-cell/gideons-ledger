@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+hitchlog.csv
+hitchlog.ps1
+refresh.log
+# third-party / derived game content: never commit
+*.zip
+me3/
+wallmod/
+docs/
+walls.me3
+Launch Elden Ring with walls.bat
+data/
+progress.txt
+nomods.me3
+Launch Elden Ring me3 NO mods.bat
+tools/
+quests.txt
+*.docx
+dist/
+build/
+*.spec
