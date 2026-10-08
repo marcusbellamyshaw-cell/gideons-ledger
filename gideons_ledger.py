@@ -544,6 +544,26 @@ def show_progress():
     return "Progress saved to progress.txt: " + text.splitlines()[0]
 
 
+def subprocess_out(cmd):  # stdout of a hidden-window command, lowercased
+    import subprocess
+    return subprocess.run(cmd, capture_output=True, creationflags=0x08000000).stdout.lower()
+
+
+class Bar(tk.Canvas):
+    """Plain green progress bar, 0-100."""
+    def __init__(self, parent):
+        super().__init__(parent, width=1, height=18, bg="#dfe6dd", highlightthickness=1, highlightbackground="#9aa59a")
+        self.pct = 0
+        self.bind("<Configure>", lambda _: self.set(self.pct))
+
+    def set(self, pct):
+        self.pct = max(0, min(100, pct))
+        self.delete("all")
+        w = self.winfo_width()
+        self.create_rectangle(0, 0, w * self.pct / 100, 20, fill="#2fa84f", width=0)
+        self.create_text(w / 2, 9, text=f"{int(self.pct)}%", fill="#103d1c" if self.pct < 55 else "white", font=("Segoe UI", 8, "bold"))
+
+
 class Tip(tk.Label):
     """Small (i) icon; hover for a tooltip."""
     def __init__(self, parent, text):
@@ -574,7 +594,7 @@ def main():
     amount = tk.StringVar(value="1,000,000")
     amount.trace_add("write", lambda *_: commas(amount.get()) != amount.get() and amount.set(commas(amount.get())))
 
-    msgs, busy = queue.Queue(), threading.Lock()
+    msgs, busy, prog = queue.Queue(), threading.Lock(), queue.Queue()  # prog: (info text, percent or None) from worker threads
 
     def run(fn):  # memory work goes to a thread so the window never freezes; the worker only touches the queue
         if not busy.acquire(blocking=False):
@@ -595,6 +615,14 @@ def main():
         try:
             while True:
                 out.set(msgs.get_nowait())
+        except queue.Empty:
+            pass
+        try:
+            while True:
+                text, pct = prog.get_nowait()
+                info.config(text=text)
+                if pct is not None:
+                    bar.set(pct)
         except queue.Empty:
             pass
         root.after(100, poll)
@@ -646,40 +674,88 @@ def main():
             _save_text(saved, d)
             return d
 
-    def launch():
+    def report(text, pct=None):
+        prog.put((text, pct))
+
+    def game_running():
+        return b"eldenring.exe" in subprocess_out(["tasklist", "/FI", "IMAGENAME eq eldenring.exe"])
+
+    def await_game(start):  # worker thread: bar creeps toward 95% on a typical-time estimate, jumps to 100% when the game process exists
+        t = time.time()
+        while (el := time.time() - t) < 90:
+            if game_running():
+                report("Elden Ring is running. Stay offline.", 100)
+                return True
+            report("Elden Ring is starting. Loading can take a minute.", start + (95 - start) * min(el / 30, 1))
+            time.sleep(1)
+        report("Launched, but the game has not appeared yet. Give it a little longer.", 95)
+        return False
+
+    def start_offline(game_dir):
         import os, subprocess
-        game_dir = game_folder()
-        if not game_dir:
-            out.set("Launch cancelled: eldenring.exe not found.")
-            return
+        report("Starting Elden Ring directly, so Easy Anti-Cheat never loads...", 30)
         env = {**os.environ, "SteamAppId": "1245620", "SteamGameId": "1245620"}
         try:
             subprocess.Popen([game_dir + r"\eldenring.exe"], cwd=game_dir, env=env)
-            out.set("Launched offline (no Easy Anti-Cheat). Stay offline.")
         except Exception as e:
-            out.set(f"Launch failed: {e}")
+            report(f"Launch failed: {e}", 0)
+            return f"Launch failed: {e}"
+        await_game(40)
+        return "Launched offline (no Easy Anti-Cheat). Stay offline."
+
+    def launch():  # folder picker must run on the UI thread, so resolve the folder here and do the rest in a worker
+        game_dir = game_folder()
+        if not game_dir:
+            report("Launch cancelled: eldenring.exe not found.", 0)
+            out.set("Launch cancelled: eldenring.exe not found.")
+            return
+        run(lambda: start_offline(game_dir))
 
     def launch_walls():  # Mod Engine 3 + walls.me3 (auto-reveal illusory walls); needs Steam running, so start it if it isn't
         import os, subprocess
         here = _app_dir()
+        report("Checking for Mod Engine 3 and walls.me3...", 5)
 
         def steam_up():
-            return b"steam.exe" in subprocess.run(["tasklist", "/FI", "IMAGENAME eq steam.exe"], capture_output=True,
-                                                  creationflags=0x08000000).stdout.lower()
-        if not steam_up():
+            return b"steam.exe" in subprocess_out(["tasklist", "/FI", "IMAGENAME eq steam.exe"])
+
+        def steam_user():  # nonzero once Steam has a signed-in user (written by the running client)
+            import winreg
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam\ActiveProcess") as k:
+                    return winreg.QueryValueEx(k, "ActiveUser")[0]
+            except OSError:
+                return 0
+        me3 = os.path.join(here, "me3", "bin", "me3.exe")
+        missing = [n for n, f in (("me3/bin/me3.exe", me3), ("walls.me3", os.path.join(here, "walls.me3"))) if not os.path.exists(f)]
+        if missing:  # check before starting Steam so a bad folder fails fast and says where it looked
+            report(f"Missing: {', '.join(missing)}. Looked in {here}", 0)
+            return f"Not found next to the app: {', '.join(missing)}. Looked in {here}"
+        if steam_up():
+            report("Steam is already running.", 60)
+        else:
+            report("Steam is not running. Starting it...", 10)
             os.startfile("steam://open/main")
-            for _ in range(60):  # up to 60s for Steam to appear, then a few more seconds to finish signing in
+            for _ in range(60):  # up to 60s for Steam to appear
                 time.sleep(1)
                 if steam_up():
-                    time.sleep(8)
                     break
             else:
+                report("Steam did not start. Start Steam yourself, then click again.", 0)
                 return "Steam did not start. Start Steam yourself, then click again."
+            for i in range(30):  # then until it reports a signed-in user (~15s typical); bar fills 30-60% on that estimate
+                if steam_user():
+                    break
+                report("Steam is starting. Waiting for it to sign in...", 30 + 30 * min(i / 15, 1))
+                time.sleep(1)
+        report("Starting Mod Engine 3 with auto-reveal walls...", 65)
         try:
-            subprocess.Popen([os.path.join(here, "me3", "bin", "me3.exe"), "launch", "-p", os.path.join(here, "walls.me3")], cwd=here)
-            return "Launching with auto-reveal walls. Stay offline."
+            subprocess.Popen([me3, "launch", "-p", os.path.join(here, "walls.me3")], cwd=here)
         except Exception as e:
+            report(f"Launch failed: {e}", 0)
             return f"Launch failed: {e}"
+        await_game(70)
+        return "Launching with auto-reveal walls. Stay offline."
 
     def section(title):
         f = tk.LabelFrame(root, text=title, padx=6, pady=4)
@@ -777,7 +853,14 @@ def main():
     btn(f, "Read progress", lambda: run(show_progress), "Story flags, endings, Great Runes, bosses and graces per region. Needs data/event_flags.json (see README).")
     btn(f, "Read NPC quest state", lambda: run(show_quests), "What each NPC would say right now. Needs data/npc_steps.json built from your own game files (see README).")
 
-    tk.Label(root, textvariable=out, wraplength=300, justify="left", relief="sunken", anchor="w", padx=6, pady=4).pack(fill="x", padx=10, pady=10)
+    tk.Label(root, textvariable=out, wraplength=300, justify="left", relief="sunken", anchor="w", padx=6, pady=4).pack(fill="x", padx=10, pady=(10, 0))
+    f = tk.Frame(root, bg="#e7f0fb", highlightthickness=1, highlightbackground="#1a6fd0", padx=6, pady=6)
+    f.pack(fill="x", padx=10, pady=10)
+    info = tk.Label(f, text="Launch progress shows here. Nothing is running yet.", bg="#e7f0fb", fg="#0b4f9c", wraplength=290,
+                    justify="left", anchor="w", font=("Segoe UI", 9))
+    info.pack(fill="x", pady=(0, 6))
+    bar = Bar(f)
+    bar.pack(fill="x")
     root.mainloop()
 
 

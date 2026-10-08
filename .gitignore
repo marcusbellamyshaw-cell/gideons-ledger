@@ -21,3 +21,4 @@ dist/
 build/
 *.spec
 game_dir.txt
+/GideonsLedger.exe
