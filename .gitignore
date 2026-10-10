@@ -23,3 +23,5 @@ build/
 game_dir.txt
 /GideonsLedger.exe
 ledger.log*
+ledger_settings.json
+save_backups/

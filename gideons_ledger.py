@@ -1,7 +1,7 @@
 """Gideon's Ledger: Elden Ring trainer. Launch offline, read/add runes, smart drops. Offline only."""
 import logging, queue, re, struct, sys, threading, time, tkinter as tk
 
-VERSION = "1.1.3"
+VERSION = "1.2.0-beta"
 log = logging.getLogger("ledger")
 log.addHandler(logging.NullHandler())
 
@@ -562,6 +562,130 @@ def show_progress():
     return "Progress saved to progress.txt: " + text.splitlines()[0]
 
 
+# Settings, save backup, rune multiplier, item search -----------------------------------------------------------------------
+def load_settings():
+    import os
+    try:
+        d = _load_json(os.path.join(_app_dir(), "ledger_settings.json"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):  # missing or corrupt file: start from defaults
+        return {}
+
+
+def save_settings(d):
+    import json, os
+    try:
+        _save_text(os.path.join(_app_dir(), "ledger_settings.json"), json.dumps(d, indent=1))
+    except OSError:
+        log.exception("Could not save settings")
+
+
+def find_save_dir():
+    """The EldenRing save folder under APPDATA (one folder per Steam id) holding ER0000.sl2, or .co2 for Seamless Co-op; newest wins."""
+    import glob, os
+    base = os.path.join(os.environ.get("APPDATA", ""), "EldenRing")
+    files = lambda d: [os.path.join(d, "ER0000." + e) for e in ("sl2", "co2") if os.path.exists(os.path.join(d, "ER0000." + e))]
+    dirs = [d for d in glob.glob(os.path.join(base, "*")) if files(d)]
+    return max(dirs, key=lambda d: max(os.path.getmtime(f) for f in files(d))) if dirs else None
+
+
+def backup_save():
+    import datetime, os, shutil
+    src = find_save_dir()
+    if not src:
+        return "Save folder not found (looked in the EldenRing folder under APPDATA)."
+    dst = os.path.join(_app_dir(), "save_backups", datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S"))
+    try:
+        shutil.copytree(src, dst)
+    except OSError as e:
+        log.exception("Save backup failed")
+        return f"Backup failed: {e}"
+    log.info("Save backup: %s -> %s", src, dst)
+    return f"Backed up your save to {dst}"
+
+
+# Rune multiplier: NpcParam.getSoul (int32 @0x2C, per the Hexinton table) is each enemy's rune reward. Multiply it on every row that
+# has one; OFF writes the original 4 bytes back. Enemies already loaded may keep their old reward until the area reloads.
+RUNE_PARAM, RUNE_OFF, INT_MAX = "NpcParam", 0x2C, 2 ** 31 - 1
+_runes = {}  # field addr -> original 4 bytes
+
+
+def _patch_fields(pm, edits):
+    """Write {addr: 4 bytes} in ONE call (see _patch_weights): fresh read of the span first so untouched fields are rewritten as-is."""
+    if not edits:
+        return
+    lo, hi = min(edits), max(edits) + 4
+    buf = bytearray(pm.read_bytes(lo, hi - lo))
+    for addr, data in edits.items():
+        buf[addr - lo:addr - lo + 4] = data
+    pm.write_bytes(lo, bytes(buf), len(buf))
+
+
+def plan_runes(read, rows, mult):
+    """{field addr: (original bytes, new bytes)} for rows with a rune reward. Refuses if the field does not look like rune rewards."""
+    lo = min(a for _, a in rows) + RUNE_OFF
+    hi = max(a for _, a in rows) + RUNE_OFF + 4
+    span = read(lo, hi - lo)
+    raw = {a + RUNE_OFF: span[a + RUNE_OFF - lo:a + RUNE_OFF - lo + 4] for _, a in rows}
+    ints = {f: struct.unpack("<i", b)[0] for f, b in raw.items()}
+    sane = sum(1 for v in ints.values() if 0 <= v <= 100_000_000)
+    if sane < len(ints) * 0.99 or not any(v > 0 for v in ints.values()):
+        raise RuntimeError("getSoul does not look right (offset moved after a patch?). Not writing.")
+    return {f: (raw[f], struct.pack("<i", min(int(v * mult), INT_MAX))) for f, v in ints.items() if v > 0}
+
+
+def set_rune_multiplier(on, mult=2.0):
+    pm = attach()[0]
+    if on:
+        if _runes:
+            return "Rune multiplier already ON."
+        if not 1 <= mult <= 100:
+            return "Multiplier must be 1 to 100."
+        rows = table_rows(pm.read_bytes, param_table(pm.read_bytes, regulation_manager(pm), RUNE_PARAM))
+        if len(rows) < 1000:
+            raise RuntimeError(f"Only {len(rows)} enemy rows found. Not writing.")
+        edits = plan_runes(pm.read_bytes, rows, mult)
+        _patch_fields(pm, {a: new for a, (old, new) in edits.items()})
+        _runes.update({a: old for a, (old, new) in edits.items()})
+        log.info("Rune multiplier x%g ON: %d of %d rows", mult, len(edits), len(rows))
+        return f"Enemy runes x{mult:g} ON ({len(edits)} enemies). Reload the area, then kill something. Click OFF before quitting."
+    if not _runes:
+        return "Rune multiplier is not ON (or app restarted: restart the game to reset)."
+    n = len(_runes)
+    _patch_fields(pm, dict(_runes))
+    _runes.clear()
+    log.info("Rune multiplier OFF: %d rows restored", n)
+    return f"Enemy runes OFF (restored {n} enemies)."
+
+
+def load_items():
+    """data/items.json: [[name, category, item id incl. category prefix], ...] built by build_items.py from your own cheat table."""
+    import os
+    try:
+        d = _load_json(os.path.join(_app_dir(), "data", "items.json"))
+        return d if isinstance(d, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def filter_items(items, query, limit=300):
+    words = query.lower().split()
+    return [it for it in items if all(w in it[0].lower() for w in words)][:limit]
+
+
+def parse_item_id(text):
+    t = text.strip().replace(",", "")
+    return int(t, 16) if t.lower().startswith("0x") else int(t)
+
+
+def add_item(item_id, qty):
+    if not 0 < item_id <= 0xFFFFFFFF:
+        return "Item ID must be 1 to 0xFFFFFFFF."
+    if not 1 <= qty <= UPGRADE_MAX:
+        return f"Quantity must be 1 to {UPGRADE_MAX}."
+    return give_item(item_id, qty)
+
+
 def subprocess_out(cmd):  # stdout of a hidden-window command, lowercased
     import subprocess
     return subprocess.run(cmd, capture_output=True, creationflags=0x08000000).stdout.lower()
@@ -610,8 +734,21 @@ def main():
     root.report_callback_exception = lambda *a: (log.error("UI callback error", exc_info=a), out.set("Unexpected error. Details are in ledger.log next to the app."))
     root.attributes("-topmost", True)
     out = tk.StringVar(value="Back up your save first. Offline mode only.")
+    prefs = load_settings()  # remembered between runs: see remember() below
 
-    amount = tk.StringVar(value="1,000,000")
+    def pref(key, default):  # a saved value only counts if it has the same type as the default
+        v = prefs.get(key, default)
+        return v if isinstance(v, type(default)) else default
+
+    def remember(key, var):
+        var.trace_add("write", lambda *_: prefs.__setitem__(key, var.get()))
+    g = prefs.get("geometry")
+    if isinstance(g, str) and re.fullmatch(r"\+\d+\+\d+", g):  # window position, only if still on screen
+        gx, gy = map(int, g[1:].split("+"))
+        if gx < root.winfo_screenwidth() - 100 and gy < root.winfo_screenheight() - 100:
+            root.geometry(g)
+
+    amount = tk.StringVar(value=pref("amount", "1,000,000"))
     amount.trace_add("write", lambda *_: commas(amount.get()) != amount.get() and amount.set(commas(amount.get())))
 
     msgs, busy, prog = queue.Queue(), threading.Lock(), queue.Queue()  # prog: (info text, percent or None) from worker threads
@@ -671,11 +808,16 @@ def main():
 
     def close():  # put the game's tables back before the app disappears
         busy.acquire(timeout=10)  # let a refresh in progress finish first
-        for fn in (lambda: smart_drops(False), lambda: set_discovery(False)):
+        for fn in (lambda: smart_drops(False), lambda: set_discovery(False), lambda: set_rune_multiplier(False)):
             try:
                 fn()
             except Exception:
                 log.exception("Restore on close failed")
+        try:
+            prefs["geometry"] = f"+{max(root.winfo_x(), 0)}+{max(root.winfo_y(), 0)}"
+        except tk.TclError:
+            pass
+        save_settings(prefs)
         log.info("Closed")
         root.destroy()
 
@@ -812,18 +954,63 @@ def main():
     btn(f, "Launch offline", launch, "Starts eldenring.exe directly so Easy Anti-Cheat never loads. Offline play only; going online risks a ban.")
     btn(f, "Launch with auto-reveal walls", lambda: run(launch_walls), "Starts the game through Mod Engine 3 with your walls.me3 profile (optional; see README). Needs Steam running; starts it for you if it isn't.")
 
+    btn(f, "Back up my save", lambda: run(backup_save), "Copies your whole Elden Ring save folder to save_backups next to the app, in a new timestamped folder. Old backups are never deleted.")
+
     f = section("Runes")
     btn(f, "Read runes", lambda: run(read_runes), "Shows your current rune count.")
     r = line(f, "Adds this many runes to your current total.")
     entry(r, amount)
     tk.Button(r, text="Add runes", command=add).pack(side="left", fill="x", expand=True)
     btn(f, "Max runes", lambda: run(lambda: add_runes(MAX_RUNES)), "Sets runes to the maximum, 999,999,999.")
+    rune_mult = tk.StringVar(value=pref("rune_mult", "2"))
+    r = line(f, "Multiplies the runes enemies drop, 1 to 100. Reload the area after turning ON; enemies already loaded may keep the old reward. OFF restores the originals.")
+    tk.Label(r, text="Enemy runes x").pack(side="left")
+    entry(r, rune_mult, 5)
+    tk.Button(r, text="ON", command=lambda: run(lambda: set_rune_multiplier(True, float(rune_mult.get())))).pack(side="left", fill="x", expand=True)
+    tk.Button(r, text="OFF", command=lambda: run(lambda: set_rune_multiplier(False))).pack(side="left", fill="x", expand=True, padx=(4, 0))
 
     f = section("Items")
-    qty = tk.StringVar(value="1")
+    qty = tk.StringVar(value=pref("lords_qty", "1"))
     r = line(f, "Gives Lord's Runes through the game's own item function, so they register properly.")
     entry(r, qty, 5)
     tk.Button(r, text="Add Lord's Rune", command=lambda: run(lambda: add_lords_rune(int(qty.get())))).pack(side="left", fill="x", expand=True)
+    def item_window():  # search the item list (data/items.json), or type an ID; one quantity
+        win = tk.Toplevel(root)
+        win.title("Add item")
+        win.attributes("-topmost", True)
+        items = load_items()
+        shown, q, idv, nv = [], tk.StringVar(), tk.StringVar(), tk.StringVar(value=pref("item_qty", "1"))
+        remember("item_qty", nv)
+        hint = "Type to search, click an item, then Add." if items else "No data/items.json yet (see README: build_items.py). You can still type an item ID below."
+        tk.Label(win, text=hint, wraplength=380, justify="left").pack(padx=10, pady=(8, 2), anchor="w")
+        tk.Entry(win, textvariable=q).pack(fill="x", padx=10)
+        lb = tk.Listbox(win, width=56, height=14, exportselection=False)
+        lb.pack(fill="both", expand=True, padx=10, pady=6)
+
+        def refresh(*_):
+            shown[:] = filter_items(items, q.get())
+            lb.delete(0, "end")
+            for name, cat, _iid in shown:
+                lb.insert("end", f"{name}   [{cat}]")
+        q.trace_add("write", refresh)
+        refresh()
+        lb.bind("<<ListboxSelect>>", lambda _: lb.curselection() and idv.set(hex(shown[lb.curselection()[0]][2])))
+        bar = tk.Frame(win)
+        bar.pack(padx=10, pady=(0, 10))
+        tk.Label(bar, text="Item ID:").pack(side="left")
+        tk.Entry(bar, textvariable=idv, width=12).pack(side="left", padx=4)
+        tk.Label(bar, text="Quantity:").pack(side="left", padx=(8, 0))
+        tk.Entry(bar, textvariable=nv, width=5, justify="right").pack(side="left", padx=4)
+
+        def do_add():
+            try:
+                iid, n = parse_item_id(idv.get()), int(nv.get())
+            except ValueError:
+                out.set("Enter a number for the item ID and quantity.")
+                return
+            run(lambda: add_item(iid, n))
+        tk.Button(bar, text="Add", command=do_add).pack(side="left", padx=(8, 0))
+
     def upgrade_window():  # one checkbox per item, one quantity for all ticked items
         win = tk.Toplevel(root)
         win.title("Upgrade items")
@@ -849,7 +1036,8 @@ def main():
             row.pack(fill="x", pady=(4, 0))
             tk.Button(row, text="All", command=lambda ns=names: setall(ns, True)).pack(side="left", expand=True, fill="x")
             tk.Button(row, text="None", command=lambda ns=names: setall(ns, False)).pack(side="left", expand=True, fill="x")
-        qty_var = tk.StringVar(value="10")
+        qty_var = tk.StringVar(value=pref("upgrade_qty", "10"))
+        remember("upgrade_qty", qty_var)
         bar = tk.Frame(win)
         bar.grid(row=1, column=0, columnspan=len(groups), pady=(0, 8))
         tk.Button(bar, text="Select all", command=lambda: setall(list(UPGRADES), True)).pack(side="left", padx=(0, 4))
@@ -859,11 +1047,12 @@ def main():
         tk.Button(bar, text="Add ticked items",
                   command=lambda: run(lambda: add_upgrades([n for n, v in checks.items() if v.get()], int(qty_var.get())))).pack(side="left")
 
+    btn(f, "Add any item (search)...", item_window, "Search weapons, armor, talismans, spells, goods and ashes of war by name, or type an item ID. Needs data/items.json from build_items.py (see README).")
     btn(f, "Weapon / spirit ash upgrade items...", upgrade_window, "Opens a list of smithing stones, somber stones and gloveworts. Tick what you want and add them in bulk.")
     btn(f, "Check item give", lambda: run(check_item_give), "Read-only self-check: confirms the item-give function was found. Nothing is called or written.")
 
     f = section("Smart drops")
-    cons = tk.BooleanVar(value=True)
+    cons = tk.BooleanVar(value=pref("consumables", True))
     r = line(f, "Also guarantee consumables and materials you don't own, not just weapons and armor. Set before turning drops ON.")
     tk.Checkbutton(r, text="Include consumables + materials", variable=cons, command=lambda: set_consumables(cons.get())).pack(side="left")
     btn(f, "Preview", lambda: run(smart_dry_run), "Read-only: counts how many drop lots would change. Nothing is written.")
@@ -871,7 +1060,7 @@ def main():
     btn(f, "OFF", lambda: run(lambda: smart_drops(False)), "Restores the original drop table byte-for-byte. Closing the app does this too.")
 
     f = section("Discovery")
-    mult = tk.StringVar(value="10")
+    mult = tk.StringVar(value=pref("disc_mult", "10"))
     r = line(f, "Multiplies the item-discovery curve (Arcane), 1 to 100. OFF restores the exact original values.")
     tk.Label(r, text="Multiplier x").pack(side="left")
     entry(r, mult, 5)
@@ -891,6 +1080,9 @@ def main():
     info.pack(fill="x", pady=(0, 6))
     bar = Bar(f)
     bar.pack(fill="x")
+    for key, var in (("amount", amount), ("lords_qty", qty), ("consumables", cons), ("disc_mult", mult), ("rune_mult", rune_mult)):
+        remember(key, var)
+    set_consumables(cons.get())
     root.mainloop()
 
 
@@ -966,6 +1158,65 @@ def selftest():
           "Fia": [{"flag": 9, "gate": "set", "lines": ["Never."]}]}  # no 'and' key, as in the real data
     assert quest_report(lambda f: f in (1, 3), st) == 'Ranni:\n    "Hello."'  # 2 clear, 3 set -> only the first matches
     assert quest_report(lambda f: f == 2, st) == 'Ranni:\n    "Later."' and quest_report(lambda f: f == 9, st).startswith("Fia:")
+    import os, tempfile
+    rune = bytearray(0x100 + 0x100 * 1500 + 0x100)  # 1500 enemy rows, stride 0x100, getSoul @+0x2C
+    rrows = [(i, 0x100 + 0x100 * i) for i in range(1500)]
+    for i, a in rrows:
+        struct.pack_into("<i", rune, a + RUNE_OFF, 0 if i % 5 == 0 else 100 + i)
+    struct.pack_into("<i", rune, rrows[1][1] + RUNE_OFF, 2_000_000_000 // 3)  # big boss: x100 must cap at INT_MAX
+    plan = plan_runes(lambda a, n: bytes(rune[a:a + n]), rrows, 100)
+    assert len(plan) == 1200 and rrows[0][1] + RUNE_OFF not in plan  # zero-reward rows untouched
+    assert struct.unpack("<i", plan[rrows[2][1] + RUNE_OFF][1])[0] == 10200 and struct.unpack("<i", plan[rrows[1][1] + RUNE_OFF][1])[0] == INT_MAX
+
+    class FakePm3:
+        def read_bytes(self, a, n):
+            return bytes(rune[a:a + n])
+
+        def write_bytes(self, a, d, n):
+            rune[a:a + n] = d
+    before3 = bytes(rune)
+    _patch_fields(FakePm3(), {a: new for a, (old, new) in plan.items()})
+    assert struct.unpack_from("<i", rune, rrows[2][1] + RUNE_OFF)[0] == 10200 and rune[:rrows[0][1] + RUNE_OFF] == before3[:rrows[0][1] + RUNE_OFF]
+    _patch_fields(FakePm3(), {a: old for a, (old, new) in plan.items()})
+    assert bytes(rune) == before3  # OFF restores byte-for-byte
+    junk = bytearray(rune)
+    for i, a in rrows:
+        struct.pack_into("<i", junk, a + RUNE_OFF, -7)
+    try:
+        plan_runes(lambda a, n: bytes(junk[a:a + n]), rrows, 2)
+        raise AssertionError("bad field not refused")
+    except RuntimeError:
+        pass
+    its = [["Moonveil", "Weapon", 9060000], ["Rivers of Blood", "Weapon", 9040000], ["Stonesword Key", "Goods", 0x40001F40]]
+    assert [i[0] for i in filter_items(its, "RIVERS blood")] == ["Rivers of Blood"] and len(filter_items(its, "")) == 3 and filter_items(its, "zzz") == []
+    assert parse_item_id("0x40001F40") == 0x40001F40 and parse_item_id("1,000") == 1000
+    assert add_item(0, 1).startswith("Item ID") and add_item(5, 0).startswith("Quantity")
+    global _app_dir
+    real_dir, real_appdata = _app_dir, os.environ.get("APPDATA")
+    with tempfile.TemporaryDirectory() as tmp:
+        _app_dir = lambda: tmp
+        assert load_settings() == {}  # missing file -> defaults
+        save_settings({"amount": "5", "consumables": False})
+        assert load_settings() == {"amount": "5", "consumables": False}
+        open(os.path.join(tmp, "ledger_settings.json"), "w").write("{not json")
+        assert load_settings() == {}  # corrupt file -> defaults
+        os.environ["APPDATA"] = os.path.join(tmp, "roaming")
+        assert find_save_dir() is None and backup_save().startswith("Save folder not found")
+        old_dir = os.path.join(tmp, "roaming", "EldenRing", "111")
+        new_dir = os.path.join(tmp, "roaming", "EldenRing", "222")
+        for d, data in ((old_dir, b"old"), (new_dir, b"new")):
+            os.makedirs(d)
+            open(os.path.join(d, "ER0000.sl2"), "wb").write(data)
+        os.utime(os.path.join(old_dir, "ER0000.sl2"), (1, 1))
+        assert find_save_dir() == new_dir  # newest save wins
+        res = backup_save()
+        copies = [os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(tmp, "save_backups")) for f in fs]
+        assert res.startswith("Backed up") and len(copies) == 1 and open(copies[0], "rb").read() == b"new"
+    _app_dir = real_dir
+    if real_appdata is None:
+        os.environ.pop("APPDATA", None)
+    else:
+        os.environ["APPDATA"] = real_appdata
     print("selftest ok")
 
 

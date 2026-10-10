@@ -18,6 +18,12 @@ Back up your save (`ER0000.sl2`) before using any trainer. Not affiliated with F
 - **Launch offline**: starts `eldenring.exe` directly with the Steam app id set, so Easy Anti-Cheat never loads.
 - **Runes**: read, add, or max out (999,999,999).
 - **Add Lord's Rune**: calls the game's own item-give function, so the item registers properly.
+- **Enemy rune multiplier**: multiplies the runes every enemy drops by 1 to 100 (the `getSoul` field of `NpcParam`). Reload the
+  area after turning it ON. OFF or closing the app restores the original values.
+- **Add any item**: search weapons, armor, talismans, spells, goods and ashes of war by name, or type an item ID. Needs an item list
+  you build from your own copy of the Hexinton cheat table, see below.
+- **Back up my save**: copies your whole save folder to `save_backups\<timestamp>` next to the app. Old backups are never deleted.
+- **Remembers your settings** (amounts, multipliers, window position) in `ledger_settings.json` next to the app.
 - **Discovery**: multiplies the item-discovery curve (Arcane) by 1 to 100; OFF restores the exact original values.
 - **Smart drops**: every enemy drop lot that offers weapons or armor you don't own always drops them
   (optionally also consumables and materials). Refreshes as you pick things up. OFF or closing the app restores
@@ -45,6 +51,18 @@ Click **Smart drops OFF** / **Discovery OFF** (or just close the window) before 
 **No Python?** Download `GideonsLedger.exe` from the [Releases](../../releases) page. It is unsigned, so Windows SmartScreen
 or antivirus may warn; the source here is the full program, and you can build it yourself with
 `pyinstaller --onefile --windowed gideons_ledger.py`. Optional `data/` and `me3/` folders go next to the EXE.
+
+## Item list for "Add any item" (optional)
+
+The item search needs `data/items.json`. This repo does not ship one, because the names and IDs come from the Hexinton Elden Ring
+cheat table, which you download yourself. With the table's `.zip` (or the `.CT` inside it) in hand, run:
+
+```
+python build_items.py "C:/path/to/Hexinton ... .zip"
+```
+
+That writes `data/items.json` (about 5,900 items) next to the app. Without it, the Add item window still works if you type an item
+ID by hand.
 
 ## Progress flag list (optional)
 
