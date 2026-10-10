@@ -1,7 +1,7 @@
 """Gideon's Ledger: Elden Ring trainer. Launch offline, read/add runes, smart drops. Offline only."""
 import logging, queue, re, struct, sys, threading, time, tkinter as tk
 
-VERSION = "1.2.0-beta"
+VERSION = "1.2.0"
 log = logging.getLogger("ledger")
 log.addHandler(logging.NullHandler())
 
